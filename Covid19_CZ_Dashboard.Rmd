@@ -1,0 +1,882 @@
+---
+title: "Covid-19 CZ Dashboard"
+output: 
+  flexdashboard::flex_dashboard:
+    orientation: rows
+    vertical_layout: scroll
+    theme: lumen
+    runtime: shiny
+---
+
+```{r setup, include=FALSE}
+library(flexdashboard)
+library(ggplot2)
+library(tidyverse)
+library(zoo)
+library(rmarkdown)
+library(knitr)
+library(ggpubr)
+library(shiny)
+library(deSolve)
+library(plotly)
+
+k.roll <- 7
+l.roll <- 30
+
+
+url.testy <- "https://onemocneni-aktualne.mzcr.cz/api/v2/covid-19/testy.csv"
+url.nakaza <- "https://onemocneni-aktualne.mzcr.cz/api/v2/covid-19/nakaza.csv"
+url.minus <- "https://onemocneni-aktualne.mzcr.cz/api/v2/covid-19/nakazeni-vyleceni-umrti-testy.csv"
+url.zaklad <- "https://onemocneni-aktualne.mzcr.cz/api/v2/covid-19/zakladni-prehled.csv"
+
+testy <- read.csv(url.testy)
+nakaza <- read.csv(url.nakaza)
+minus <- read_csv(url.minus)
+zaklad.stat <- read.csv(url.zaklad)
+
+jk <- ifelse(nrow(nakaza) == nrow(testy),procenta <-  nakaza$prirustkovy_pocet_nakazenych/testy$prirustkovy_pocet_testu, procenta <- nakaza$prirustkovy_pocet_nakazenych[1:(nrow(nakaza)-1)]/testy$prirustkovy_pocet_testu)
+
+prehledT.procenta <- round(procenta,4)*100
+
+prehledT <- data.frame(tail(testy$datum, 5),tail(testy$prirustkovy_pocet_testu, 5),tail(testy$kumulativni_pocet_testu, 5),tail(prehledT.procenta, 5))
+colnames(prehledT) <- c("Date","Daily tests","Cumulative number of tests","Test positivity (in %)")
+
+prehledN <- data.frame(tail(nakaza$datum, 5), tail(nakaza$prirustkovy_pocet_nakazenych, 5), tail(nakaza$kumulativni_pocet_nakazenych, 5), tail(minus$kumulativni_pocet_vylecenych, 5), tail(minus$kumulativni_pocet_umrti, 5))
+colnames(prehledN) <- c("Date","Daily cases","Cumulative number of cases","Cumulative number of recovered", "Cumulative number of deaths")
+
+
+sir_1 <- function(beta, gamma, theta, S0, I0, R0, D0, times) {
+  require(deSolve) # for the "ode" function
+  
+  # the differential equations:
+  sir_equations <- function(time, variables, parameters) {
+    with(as.list(c(variables, parameters)), {
+      dS <- -beta * I * S
+      dI <-  beta * I * S - gamma * I - theta * I
+      dR <-  gamma * I
+      dD <-  theta * I
+      return(list(c(dS, dI, dR, dD)))
+    })
+  }
+  # the parameters values:
+  parameters_values <- c(beta  = beta, gamma = gamma, theta = theta)
+  
+  # the initial values of variables:
+  initial_values <- c(S = S0, I = I0, R = R0, D = D0)
+  
+  # solving
+  out <- ode(initial_values, times, sir_equations, parameters_values)
+  
+  # returning the output:
+  as.data.frame(out)
+}
+
+beta <- 0.0000000148 #infect ratio
+gamma <- 0.088 #recovery 
+theta <- 0.0009 #umrtnost
+lambda <- 0.0364 #hospitalizovan??
+S0 <- 10000000
+I0 <- 5752
+R0 <- 18933
+D0 <- 428
+
+times <- seq(0, 250)
+kapacita <- 15500
+datumy <- seq.Date(as.Date("2020-09-01"), by = 1, along.with = times)
+
+rho <- S0*beta/gamma
+
+data <- sir_1(beta = beta, gamma = gamma, theta = theta, S0 = S0, I0 = I0, R0 = R0, D0 = D0, times)
+H <- data$I*lambda
+data <- data_frame(data,H, datumy)
+
+p.1 <- ggplot(data, aes(x = datumy))  +
+  geom_line(aes(y = D, color = "Deceased")) +
+  geom_line(aes(y = I, color = "Infected")) +
+  geom_line(aes(y = H, color = "Hospitalized")) +
+  geom_line(aes(y = S, color = "Susceptible")) +
+  geom_line(aes(y = R, color = "Recovered")) +
+  geom_hline(yintercept = kapacita, aes(color = "kapacita"), linetype="dashed", color = "black") +
+  theme_minimal() +
+  ylab("Number of people") +
+  labs(color = "Legend")
+
+
+p.2 <- ggplot(data, aes(x = datumy))  +
+  geom_line(aes(y = D, color = "Deceased")) +
+  geom_line(aes(y = I, color = "Infected")) +
+  geom_line(aes(y = H, color = "Hospitalized")) +
+  geom_line(aes(y = R, color = "Recovered")) +
+  geom_hline(yintercept = kapacita, aes(color = "kapacita"), linetype="dashed", color = "black") +
+  theme_minimal() +
+  ylab("Number of people") +
+  labs(color = "Legend")
+
+
+p.3 <- ggplot(data, aes(x = datumy))  +
+  geom_line(aes(y = D, color = "Deceased")) +
+  geom_line(aes(y = I, color = "Infected")) +
+  geom_line(aes(y = H, color = "Hospitalized")) +
+  geom_hline(yintercept = kapacita, aes(color = "kapacita"), linetype="dashed", color = "black") +
+  theme_minimal() +
+  ylab("Number of people") +
+  labs(color = "Legend")
+
+
+p.4 <- ggplot(data, aes(x = datumy))  +
+  geom_line(aes(y = D, color = "Deceased")) +
+  geom_line(aes(y = H, color = "Hospitalized")) +
+  geom_hline(yintercept = kapacita, aes(color = "kapacita"), linetype="dashed", color = "black") +
+  theme_minimal() +
+  ylab("Number of people") +
+  labs(color = "Legend")
+
+
+
+nakaza <- read.csv(url.nakaza, stringsAsFactors = FALSE)
+
+minus$new <- minus$kumulativni_pocet_nakazenych - minus$kumulativni_pocet_vylecenych - minus$kumulativni_pocet_umrti
+
+data <- sir_1(beta = beta, gamma = gamma, theta = theta, S0 = S0, I0 = I0, R0 = R0, D0 = D0, times)
+H <- data$I*lambda
+
+minusV <- minus$new[nakaza$datum >= "2020-09-01"]
+datumZ <- nakaza$datum[nakaza$datum >= "2020-09-01"]
+minusD <- minus$kumulativni_pocet_umrti[nakaza$datum >= "2020-09-01"]
+datazariV <- data_frame(as.factor(datumZ), minusV,minusD)
+data <- data_frame(data,H, datumy)
+
+
+
+Roll.Mean.Dates <- testy$datum[(1+(k.roll-1)/2):(nrow(testy)-(k.roll-1)/2)] 
+Roll.Mean.Values <- rollmean(testy$prirustkovy_pocet_testu,k.roll) 
+testy.roll <- data.frame(Roll.Mean.Dates,Roll.Mean.Values) 
+title.plot <- paste(k.roll, " day rollmean") 
+
+
+Roll.Mean.Dates.last.l <- tail(Roll.Mean.Dates, l.roll)
+Roll.Mean.Values.last.l <- tail(Roll.Mean.Values, l.roll)
+testy.roll.Last.l <- data_frame(Roll.Mean.Dates.last.l, Roll.Mean.Values.last.l)
+title.plot.l <- paste("Last ",l.roll, " days") 
+
+
+Roll.Mean.Dates.nakaza <- nakaza$datum[(1+(k.roll-1)/2):(nrow(nakaza)-(k.roll-1)/2)] 
+Roll.Mean.Values.nakaza <- rollmean(nakaza$prirustkovy_pocet_nakazenych,k.roll) 
+nakaza.roll <- data.frame(Roll.Mean.Dates.nakaza,Roll.Mean.Values.nakaza) 
+nakaza.title.plot <- paste(k.roll, " day rollmean") 
+
+
+Roll.Mean.Dates.last.l.nakaza <- tail(Roll.Mean.Dates.nakaza, l.roll)
+Roll.Mean.Values.last.l.nakaza <- tail(Roll.Mean.Values.nakaza, l.roll)
+nakaza.roll.Last.l <- data_frame(Roll.Mean.Dates.last.l.nakaza, Roll.Mean.Values.last.l.nakaza)
+nakaza.title.plot.l <- paste("Last ",l.roll, " days") 
+
+
+jk <- ifelse(nrow(nakaza) == nrow(testy),procenta <-  nakaza$prirustkovy_pocet_nakazenych/testy$prirustkovy_pocet_testu, procenta <- nakaza$prirustkovy_pocet_nakazenych[1:(nrow(nakaza)-1)]/testy$prirustkovy_pocet_testu)
+
+datum <- testy$datum
+
+df.procenta <- data_frame(datum,procenta)
+
+Roll.Mean.Dates.procenta <- df.procenta$datum[(1+(k.roll-1)/2):(nrow(df.procenta)-(k.roll-1)/2)] 
+Roll.Mean.Values.procenta <- rollmean(df.procenta$procenta,k.roll) 
+procenta.roll <- data.frame(Roll.Mean.Dates.procenta,Roll.Mean.Values.procenta) 
+procenta.title.plot <- paste(k.roll, " day rollmean") 
+
+
+Roll.Mean.Dates.last.l.procenta <- tail(Roll.Mean.Dates.procenta, l.roll)
+Roll.Mean.Values.last.l.procenta <- tail(Roll.Mean.Values.procenta, l.roll)
+procenta.roll.Last.l <- data_frame(Roll.Mean.Dates.last.l.procenta, Roll.Mean.Values.last.l.procenta)
+procenta.title.plot.l <- paste("Last ",l.roll, " days")
+
+
+Dates.last.l.procenta <- tail(df.procenta$datum, l.roll)
+Values.last.l.procenta <- tail(df.procenta$procenta, l.roll)
+Last.l <- data_frame(Dates.last.l.procenta, Values.last.l.procenta)
+
+
+celkova.pozitiva.testu <- nakaza$kumulativni_pocet_nakazenych[nrow(nakaza)]/testy$kumulativni_pocet_testu[nrow(testy)]
+celkova.pozitiva.testu30 <- (nakaza$kumulativni_pocet_nakazenych[nrow(nakaza)]-nakaza$kumulativni_pocet_nakazenych[nrow(nakaza)-30])/(testy$kumulativni_pocet_testu[nrow(testy)]-testy$kumulativni_pocet_testu[nrow(testy)-30])
+
+cpt <- round(celkova.pozitiva.testu*100,3)
+cpt30 <- round(celkova.pozitiva.testu30*100,3)
+
+last.date <- nakaza$datum[nrow(nakaza)]
+
+```
+
+Overview
+=====================
+
+Column 
+-----------------------------------------------------------------------
+
+### Chart A
+
+```{r}
+valueBox(formatC(zaklad.stat$aktivni_pripady, big.mark = " "), caption = "Active cases", icon = "ion-android-alert")
+```
+
+### Chart A
+
+```{r}
+valueBox(formatC(zaklad.stat$aktualne_hospitalizovani, big.mark = " "), caption = "Currently hospitalized", icon = "ion-alert-circled")
+```
+
+### Chart A
+
+```{r}
+valueBox(paste(round(zaklad.stat$aktualne_hospitalizovani/zaklad.stat$aktivni_pripady,4)*100,"%"), caption = "Proportion of infected needing hospital", icon = "ion-alert-circled")
+```
+
+### Chart A
+
+```{r}
+valueBox(paste(round(tail(minus$kumulativni_pocet_umrti,1)/tail(nakaza$kumulativni_pocet_nakazenych,1), 4)*100,"%"), caption = "Mortality", icon = "ion-alert-circled")
+```
+
+
+Column 
+-----------------------------------------------------------------------
+
+### Tests
+
+```{r}
+
+kable(prehledT,caption = "Basic overview (Tests)")
+
+```
+
+Column 
+-----------------------------------------------------------------------
+
+### Decease
+
+```{r}
+kable(prehledN,caption = "Basic overview (Decease)")
+```
+
+Column 
+-----------------------------------------------------------------------
+
+### Information
+
+Last update: ``r Sys.time()``.
+
+Newest data are from ``r last.date`` from the website of the Ministry of Health of Czech Republic (https://onemocneni-aktualne.mzcr.cz/covid-19)
+
+
+
+SIR Models
+=====================
+
+Column
+----------------------
+
+```{r}
+
+info1 <- paste("Peak will happen on ",data$datumy[data$I == max(data$I)], "with number of confirmed cases equal to ",round(data$I[data$I == max(data$I)])
+      , "and ",round(data$H[data$I == max(data$I)][1]),"people at the hospital at the time.")
+
+info2 <- paste("Capacity of hospital, which is equal to ",kapacita,"beds, will be overreached on ",data$datumy[data$H > kapacita][1])
+
+info3 <- paste("Sum of all Covid-19 cases will be ", round(max(data$R)))
+
+info4 <- paste("Number of deaths will be",round(max(data$D)))
+
+info5 <- paste("Rho is equal to ",round(rho,3))
+
+```
+
+### Chart A
+
+```{r}
+valueBox(data$datumy[data$I == max(data$I)], caption = "Peak date", icon = "ion-android-alert")
+```
+
+### Chart A
+
+```{r}
+valueBox(prettyNum(round(data$I[data$I == max(data$I)]), big.mark = " "), caption = "Peak active cases", icon = "ion-android-alert")
+```
+
+### Chart A
+
+```{r}
+valueBox(prettyNum(round(data$H[data$I == max(data$I)][1]), big.mark = " "), caption = "Needing hospital at peak", icon = "ion-android-alert")
+```
+
+### Chart A
+
+```{r}
+
+valueBox(data$datumy[data$H > kapacita][1], caption = "Hospitals ovecrowded", icon = "ion-android-alert")
+
+```
+
+
+
+
+Column {.tabset .tabset-fade}
+----------------------
+
+### Deceased/Infected/Hospitalized/Susceptible/Recovered
+
+```{r}
+ggplotly(p.1)
+```
+
+### Deceased/Infected/Hospitalized/Recovered
+
+```{r}
+
+ggplotly(p.2)
+
+```
+
+### Deceased/Infected/Hospitalized
+
+```{r}
+
+ggplotly(p.3)
+
+```
+
+### Deceased/Hospitalized
+
+```{r}
+
+ggplotly(p.4)
+
+```
+
+Column
+----------------------
+
+
+### Chart A
+
+```{r}
+
+valueBox(prettyNum(round(max(data$R)), big.mark = " "), caption = "Total infected till the end", icon = "ion-android-person")
+
+```
+
+### Chart A
+
+```{r}
+
+valueBox(prettyNum(round(max(data$D)), big.mark = " "), caption = "Number of deaths", icon = "ion-android-person")
+
+```
+
+### Chart A
+
+```{r}
+valueBox(round(rho,3), caption = "Rho value", icon = "ion-android-warning")
+```
+
+
+Column {.tabset}
+----------------------
+
+### Deceased/Hospitalized/Infected
+
+```{r}
+
+ggplotly(ggplot(data, aes(x = datumy))  +
+  geom_line(aes(y = D, color = "Deceased")) +
+  geom_line(aes(y = I, color = "Infected")) +
+  geom_line(aes(y = H, color = "Hospitalized")) +
+  geom_point(shape = 20, data = datazariV, aes(x = as.Date(datumZ), y = minusV), color = "blue2") +
+  geom_hline(yintercept = kapacita, aes(color = "kapacita"), linetype="dashed", color = "black") +
+  theme_minimal() +
+  ylab("Number of people") +
+  labs(title = "Model comparison to real data",color = "Legend"))
+
+```
+
+### Deceased
+
+```{r}
+
+ggplotly(ggplot(data, aes(x = datumy))  +
+  geom_line(aes(y = D, color = "Deceased")) +
+  geom_point(shape = 20,data = datazariV, aes(x = as.Date(datumZ), y = minusD), color = "red") +
+  theme_minimal() +
+  ylab("Number of people") +
+  labs(title = "Model comparison to real data ('Deceased')",color = "Legend"))
+
+```
+
+### Hospitalized
+
+```{r}
+ggplotly(ggplot(data, aes(x = datumy))  +
+  geom_line(aes(y = H, color = "Hospitalized")) +
+  geom_point(shape = 19,data = zaklad.stat, aes(x = as.Date(datum), y = aktualne_hospitalizovani), color = "red") +
+  geom_hline(yintercept = kapacita, aes(color = "kapacita"), linetype="dashed", color = "black") +
+  theme_minimal() +
+  ylab("Number of people") +
+  labs(title = "Model comparison to real data ('Hospitalized')",color = "Legend"))
+```
+
+
+Tests
+=====================
+
+Column 
+---------------------
+### Cumulative number of tests
+```{r}
+ggplotly(ggplot(testy, aes(as.Date(datum),kumulativni_pocet_testu)) +
+  geom_line() +
+  xlab("Date") +
+  ylab("Number of tests") +
+  labs(title = "Cumulative number of tests") + 
+  theme_minimal())
+```
+
+Column 
+---------------------
+
+### Daily number of tests
+
+```{r}
+ggplotly(ggplot(testy, aes(as.Date(datum),prirustkovy_pocet_testu)) +
+  geom_line() +
+  xlab("Date") +
+  ylab("Number of tests") +
+  labs(title = "Daily number of tests") + 
+  theme_minimal())
+
+```
+
+Column 
+---------------------
+
+### Rollmean of daily tests
+
+```{r}
+ggplotly(ggplot(testy.roll, aes(as.Date(Roll.Mean.Dates),Roll.Mean.Values)) +
+  geom_line() +
+  xlab("Date") +
+  ylab("Rollmean of daily tests") +
+  labs(title = title.plot) + 
+  theme_minimal())
+```
+
+Column 
+---------------------
+
+### Rollmean of daily tests
+
+```{r}
+ggplotly(ggplot(testy.roll.Last.l, aes(as.Date(Roll.Mean.Dates.last.l),Roll.Mean.Values.last.l)) +
+  geom_line() +
+  xlab("Datum") +
+  ylab("Rollmean of daily tests") +
+  labs(title = title.plot.l, subtitle = title.plot) + 
+  theme_minimal())
+```
+
+Cases
+=====================
+Column 
+---------------------
+
+### Cumulative number of infected
+
+```{r}
+ggplotly(ggplot(nakaza, aes(as.Date(datum),kumulativni_pocet_nakazenych)) +
+  geom_line() +
+  xlab("Date") +
+  ylab("Cumulative number of infected") + 
+  theme_minimal() + 
+  labs(title = "Since the beginning"))
+```
+
+Column 
+---------------------
+
+### Daily number of infected
+
+```{r}
+ggplotly(ggplot(nakaza, aes(as.Date(datum),prirustkovy_pocet_nakazenych)) +
+  geom_line() +
+  xlab("Date") +
+  ylab("Daily number of infected") + 
+  theme_minimal() + 
+  labs(title = "Since the beginning"))
+```
+
+
+Column 
+---------------------
+
+### Rollmean of new daily cases
+
+```{r}
+ggplotly(ggplot(nakaza.roll, aes(as.Date(Roll.Mean.Dates.nakaza),Roll.Mean.Values.nakaza)) +
+  geom_line() +
+  xlab("Date") +
+  ylab("Rollmean of new daily cases") +
+  labs(title = nakaza.title.plot) + 
+  theme_minimal())
+```
+
+Column 
+---------------------
+
+### Rollmean of new daily cases
+
+```{r}
+ggplotly(ggplot(nakaza.roll.Last.l, aes(as.Date(Roll.Mean.Dates.last.l.nakaza),Roll.Mean.Values.last.l.nakaza)) +
+  geom_line() +
+  xlab("Date") +
+  ylab("Rollmean of new daily cases") +
+  labs(title = nakaza.title.plot.l, subtitle = nakaza.title.plot) + 
+  theme_minimal())
+```
+
+Test positivity
+=====================
+
+Column 
+---------------------
+### Proportion of positive tests on all test
+```{r}
+ggplotly(ggplot(df.procenta, aes(as.Date(datum),procenta)) +
+  geom_line() +
+  xlab("Date") +
+  ylab("Proportion of positive tests on all test") + 
+  theme_minimal() + 
+  labs(title = "Since the beginning"))
+```
+
+Column 
+---------------------
+### Chart A
+
+```{r}
+
+valueBox(paste(cpt,"%"), caption = "Test positivity since the beginning", icon = "ion-trophy")
+
+```
+
+### Chart B
+
+```{r}
+
+valueBox(paste(cpt30,"%"), caption = "Test positivity for the last 30 days", icon = "ion-trophy")
+
+```
+
+Column 
+---------------------
+### Per cent of positive tests
+```{r}
+ggplotly(ggplot(Last.l, aes(as.Date(Dates.last.l.procenta),Values.last.l.procenta)) +
+  geom_line() +
+  xlab("Date") +
+  ylab("Per cent of positive tests") + 
+  labs(title = procenta.title.plot.l) +
+  theme_minimal())
+```
+
+
+Column 
+---------------------
+### Rollmean of positive tests
+```{r}
+ggplotly(ggplot(procenta.roll, aes(as.Date(Roll.Mean.Dates.procenta),Roll.Mean.Values.procenta)) +
+  geom_line() +
+  xlab("Date") +
+  ylab("Rollmean of positive tests") +
+  labs(title = procenta.title.plot) + 
+  theme_minimal())
+```
+
+
+Column 
+---------------------
+### Rollmean of positive tests
+```{r}
+ggplotly(
+ggplot(procenta.roll.Last.l, aes(as.Date(Roll.Mean.Dates.last.l.procenta),Roll.Mean.Values.last.l.procenta)) +
+  geom_line() +
+  xlab("Date") +
+  ylab("Rollmean of positive tests") +
+  labs(title = procenta.title.plot.l, subtitle = procenta.title.plot) + 
+  theme_minimal())
+```
+
+
+
+Linear model
+=====================
+
+Column 
+---------------------
+
+### Since the beginning (new cases)
+
+```{r}
+
+
+testy <- read.csv(url.testy)
+nakaza <- read.csv(url.nakaza)
+
+jk <- ifelse(nrow(nakaza) == nrow(testy),procenta <-  nakaza$prirustkovy_pocet_nakazenych/testy$prirustkovy_pocet_testu, procenta <- nakaza$prirustkovy_pocet_nakazenych[1:(nrow(nakaza)-1)]/testy$prirustkovy_pocet_testu)
+
+
+datum <- testy$datum
+df.procenta <- data_frame(datum,procenta)
+for.days <- 5
+
+pripady <- nakaza$prirustkovy_pocet_nakazenych
+
+f <- 1
+for (f in 1:for.days) {
+  
+  pripady[length(pripady)+1] <- NA
+  
+}
+
+min.date <- as.Date(nakaza$datum[1])
+max.date <- as.Date(nakaza$datum[nrow(nakaza)]) + for.days
+datum <- seq.Date(min.date,max.date,1)
+
+temp <- 1:length(datum)
+
+model <- data.frame(datum, temp, pripady)
+nc <- ncol(model)
+
+n <- 1
+for (n in 1:for.days) {
+  
+  model <- cbind(model, NA)
+  lin.model <- lm(model$pripady[1:(nrow(model)-7*n+7)] ~ model$temp[1:(nrow(model)-7*n+7)])
+  pre.values <- lin.model$coefficients[1]+lin.model$coefficients[2]*model$temp
+  model[1:(nrow(model)),nc+n] <- pre.values
+  colnames(model)[nc+n] <- paste(n,".odhad")
+  
+}
+
+
+odhady7.begin <- tail(model,1)
+
+ggplotly(
+  ggplot(data = model, aes(x = datum)) +
+  geom_line(aes(y = `1 .odhad`, color = "1. estimate (today)")) +
+  geom_line(aes(y = `2 .odhad`, color = "2. estimate (-7 days)")) +
+  geom_line(aes(y = `3 .odhad`, color = "3. estimate (-14 days)")) +
+  geom_line(aes(y = `4 .odhad`, color = "4. estimate (-21 days)")) +
+  geom_line(aes(y = `5 .odhad`, color = "5. estimate (-28 days)")) +
+  geom_line(aes(y = pripady, color = "Number of cases")) +
+  theme_minimal() +
+  labs(title = "Comparison of estimates") + 
+  ylab("Number of cases")
+    )
+
+
+```
+
+
+
+Column 
+---------------------
+
+### Last 60 days (new cases)
+
+```{r}
+
+
+n <- 1
+model.range <- 60
+model <- data.frame(datum, temp, pripady)
+model60 <- tail(model, model.range)
+nc <- ncol(model60)
+title.model.range <- paste("In last ", model.range, "days")
+
+for (n in 1:for.days) {
+  
+  model60 <- cbind(model60, NA)
+  lin.model60 <- lm(model60$pripady[1:(nrow(model60)-7*n+7)] ~ model60$temp[1:(nrow(model60)-7*n+7)])
+  pre.values <- lin.model60$coefficients[1]+lin.model60$coefficients[2]*model60$temp
+  model60[1:(nrow(model60)),nc+n] <- pre.values
+  colnames(model60)[nc+n] <- paste(n,".odhad")
+  
+}
+
+ggplotly(
+  ggplot(model60, aes(x = datum)) +
+  geom_line(aes(y = `1 .odhad`, color = "1. estimate (today)")) +
+  geom_line(aes(y = `2 .odhad`, color = "2. estimate (-7 days)")) +
+  geom_line(aes(y = `3 .odhad`, color = "3. estimate (-14 days)")) +
+  geom_line(aes(y = `4 .odhad`, color = "4. estimate (-21 days)")) +
+  geom_line(aes(y = `5 .odhad`, color = "5. estimate (-28 days)")) +
+  geom_line(aes(y = pripady, color = "Number of cases")) +
+  theme_minimal() + 
+  labs(title = "Comparison of estimates", subtitle = title.model.range) + 
+  ylab("Number of cases")
+)
+
+odhady7.30 <- tail(model60,1)
+
+
+```
+
+Quadratic model
+=====================
+
+Column
+---------------
+
+### Since the beginning (new cases)
+
+``` {r}
+
+model <- data.frame(datum, temp, pripady)
+nc <- ncol(model)
+
+n <- 1
+for (n in 1:for.days) {
+  
+  model <- cbind(model, NA)
+  cas <- model$temp[1:(nrow(model)-7*n+7)]
+  cas2 <- cas^2
+  quad.model <- lm(model$pripady[1:(nrow(model)-7*n+7)] ~ cas + cas2)
+  pre.values <- quad.model$coefficients[1] + quad.model$coefficients[2]*model$temp + quad.model$coefficients[3]*model$temp^2
+  model[1:(nrow(model)),nc+n] <- pre.values
+  colnames(model)[nc+n] <- paste(n,".odhad")
+  
+}
+
+ggplotly(
+ggplot(model, aes(x = datum)) +
+  geom_line(aes(y = `1 .odhad`, color = "1. estimate (today)")) +
+  geom_line(aes(y = `2 .odhad`, color = "2. estimate (-7 days)")) +
+  geom_line(aes(y = `3 .odhad`, color = "3. estimate (-14 days)")) +
+  geom_line(aes(y = `4 .odhad`, color = "4. estimate (-21 days)")) +
+  geom_line(aes(y = `5 .odhad`, color = "5. estimate (-28 days)")) +
+  geom_line(aes(y = pripady, color = "Number of cases")) +
+  theme_minimal() +
+  labs(title = "Comparison of estimates") + 
+  ylab("Number of cases")
+)
+
+```
+
+Column
+---------------------
+
+### Last 60 days (new cases)
+
+```{r}
+
+n <- 1
+model.range <- 60
+model <- data.frame(datum, temp, pripady)
+model60 <- tail(model, model.range)
+nc <- ncol(model60)
+title.model.range <- paste("In last ", model.range, "days")
+
+for (n in 1:for.days) {
+  
+  model60 <- cbind(model60, NA)
+  cas <- model60$temp[1:(nrow(model60)-7*n+7)]
+  cas2 <- cas^2
+  quad.model60 <- lm(model60$pripady[1:(nrow(model60)-7*n+7)] ~ cas + cas2)
+  pre.values <- quad.model60$coefficients[1] + quad.model60$coefficients[2]*model60$temp + quad.model60$coefficients[3]*model60$temp^2
+  model60[1:(nrow(model60)),nc+n] <- pre.values
+  colnames(model60)[nc+n] <- paste(n,".odhad")
+  
+}
+ggplotly(
+ggplot(model60, aes(x = datum)) +
+  geom_line(aes(y = `1 .odhad`, color = "1. estimate (today)")) +
+  geom_line(aes(y = `2 .odhad`, color = "2. estimate (-7 days)")) +
+  geom_line(aes(y = `3 .odhad`, color = "3. estimate (-14 days)")) +
+  geom_line(aes(y = `4 .odhad`, color = "4. estimate (-21 days)")) +
+  geom_line(aes(y = `5 .odhad`, color = "5. estimate (-28 days)")) +
+  geom_line(aes(y = pripady, color = "Number of cases")) +
+  theme_minimal() +
+  labs(title = "Comparison of estimates", subtitle = title.model.range) + 
+  ylab("Number of cases")
+)
+
+
+```
+
+Exponential model
+=====================
+
+Column
+---------------------
+
+### Last 60 days (new cases)
+
+```{r}
+
+
+datum <- testy$datum
+for.days <- 5
+
+pripady <- nakaza$prirustkovy_pocet_nakazenych
+
+f <- 1
+for (f in 1:for.days) {
+  
+  pripady[length(pripady)+1] <- NA
+  
+}
+
+min.date <- as.Date(nakaza$datum[1])
+max.date <- as.Date(nakaza$datum[nrow(nakaza)]) + for.days
+datum <- seq.Date(min.date,max.date,1)
+
+
+
+temp <- 1:length(datum)
+
+model <- data.frame(datum, temp, pripady)
+nc <- ncol(model)
+
+
+n <- 1
+model.range <- 60
+model <- data.frame(datum, temp, pripady)
+model60 <- tail(model, model.range)
+nc <- ncol(model60)
+title.model.range <- paste("In last ", model.range, "days")
+
+for (n in 1:for.days) {
+  
+  model60 <- cbind(model60, NA)
+  cas <- model60$temp[1:(nrow(model60)-7*n+7)]
+  exp.model60 <- lm(log(model60$pripady[1:(nrow(model60)-7*n+7)]) ~ cas)
+  pre.values <- exp(exp.model60$coefficients[1] + exp.model60$coefficients[2]*model60$temp)
+  model60[1:(nrow(model60)),nc+n] <- pre.values
+  colnames(model60)[nc+n] <- paste(n,".odhad")
+  
+}
+
+ggplotly(
+ggplot(model60, aes(x = datum)) +
+  geom_line(aes(y = `1 .odhad`, color = "1. estimate (today)")) +
+  geom_line(aes(y = `2 .odhad`, color = "2. estimate (-7 days)")) +
+  geom_line(aes(y = `3 .odhad`, color = "3. estimate (-14 days)")) +
+  geom_line(aes(y = `4 .odhad`, color = "4. estimate (-21 days)")) +
+  geom_line(aes(y = `5 .odhad`, color = "5. estimate (-28 days)")) +
+  geom_line(aes(y = pripady, color = "Number of cases")) +
+  theme_minimal() +
+  labs(title = "Comparison of estimates", subtitle = title.model.range) + 
+  ylab("Number of cases")
+)
+
+exp.odhady7.30 <- tail(model60,1)
+exp.odhady7.tom <- model60[nrow(model60)-4,1:(n+3)]
+
+
+```
